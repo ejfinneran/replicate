@@ -97,6 +97,19 @@ Run the dump script:
     $ remote_command="replicate -r /app/config/environment -d 'User.find(1234)'"
     $ ssh example.org "$remote_command" |replicate -r ./config/environment -l
 
+### Dumping and loading from Heroku
+
+Use the -h options when dumping data from Heroku and use the -h or -b options when loading the data.
+
+	$ remote_command="replicate -r /app/config/environment -dh 'User.find(1234)'"
+	$ heroku run "$remote_command" | replicate -r ./config/environment -lb
+
+	Ignoring line: Running `replicate -r ./config/environment -dbq "Post.all"` attached to terminal... up, run.6283
+    ==> loaded 6 total objects:
+    Post      4
+    User      2
+
+
 ActiveRecord
 ------------
 

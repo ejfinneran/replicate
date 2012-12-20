@@ -45,11 +45,21 @@ class DumperTest < Test::Unit::TestCase
   end
 
   def test_writing_to_io
-    io = StringIO.new
+    io = Replicate::Serializer.new
     io.set_encoding 'BINARY' if io.respond_to?(:set_encoding)
     @dumper.marshal_to io
     @dumper.dump object = thing
     data = Marshal.dump(['Replicate::Object', object.id, object.attributes])
+    assert_equal data, io.string
+  end
+
+  def test_writing_to_io_with_base64_encoding
+    io = Replicate::Serializer.new
+    io.mode = :base64
+    io.set_encoding 'BINARY' if io.respond_to?(:set_encoding)
+    @dumper.marshal_to io
+    @dumper.dump object = thing
+    data = Base64.strict_encode64(Marshal.dump(['Replicate::Object', object.id, object.attributes]))
     assert_equal data, io.string
   end
 

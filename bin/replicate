@@ -22,6 +22,8 @@
 #/ Options:
 #/   -r, --require        Require the library. Often used with 'config/environment'.
 #/   -i, --keep-id        Use replicated ids when loading dump file.
+#/   -b, --base64         Use Base64 encoding when dumping and loading
+#/   -h, --heroku         Heroku friendly settings. Base64 encoding and no logging to stderr (Equivilant to -b -q options)
 #/   -f, --force          Allow loading in production environments.
 #/   -v, --verbose        Write more status output.
 #/   -q, --quiet          Write less status output.
@@ -33,6 +35,7 @@ require 'optparse'
 # default options
 mode     = nil
 verbose  = false
+base64   = false
 quiet    = false
 keep_id  = false
 out      = STDOUT
@@ -47,6 +50,8 @@ ARGV.options do |opts|
   opts.on("-l", "--load")      { mode = :load }
   opts.on("-r", "--require=f") { |file| require file }
   opts.on("-v", "--verbose")   { verbose = true }
+  opts.on("-b", "--base64")    { base64 = true }
+  opts.on("-h", "--heroku")    { base64 = true; quiet = true }
   opts.on("-q", "--quiet")     { quiet = true }
   opts.on("-i", "--keep-id")   { keep_id = true }
   opts.on("--force")           { force = true }
@@ -67,8 +72,12 @@ end
 if mode == :dump
   script = ARGV.shift
   usage.call if script.empty?
+  serializer = Replicate::Serializer.new
+  if base64
+    serializer.mode = :base64
+  end
   Replicate::Dumper.new do |dumper|
-    dumper.marshal_to out
+    dumper.marshal_to serializer
     dumper.log_to $stderr, verbose, quiet
     if script == '-'
       code = $stdin.read
@@ -79,18 +88,41 @@ if mode == :dump
       objects = dumper.instance_eval(script, '<argv>', 0)
       dumper.dump objects
     end
+    serializer.flush
   end
 
 # load mode means we're reading objects from stdin and creating them under
 # the current environment.
 elsif mode == :load
+  require 'base64'
+  if base64
+    # Remove newlines and other characters that Base64 doesn't like
+    input = $stdin.readlines.map(&:strip)
+
+    begin
+      data = Base64.strict_decode64(input.join)
+    rescue ArgumentError
+      # Heroku injects lines into STDOUT so we need to account for that here:
+      if input.size > 1
+        ignored_line = input.shift
+        $stderr.puts "Ignoring line: #{ignored_line}"
+        retry
+      else
+        abort "Check that the input is actually Base64 encoded"
+      end
+    end
+
+    io = StringIO.new(data)
+  else
+    io = $stdin
+  end
   if Replicate.production_environment? && !force
     abort "error: refusing to load in production environment\n" +
           "       manual override: #{File.basename($0)} --force #{original_argv.join(' ')}"
   else
     Replicate::Loader.new do |loader|
       loader.log_to $stderr, verbose, quiet
-      loader.read $stdin
+      loader.read io
     end
   end
 

@@ -4,6 +4,7 @@ module Replicate
   autoload :Loader,  'replicate/loader'
   autoload :Object,  'replicate/object'
   autoload :Status,  'replicate/status'
+  autoload :Serializer, 'replicate/serializer'
   autoload :AR,      'replicate/active_record'
 
   # Determine if this is a production looking environment. Used in bin/replicate
