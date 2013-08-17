@@ -23,6 +23,11 @@
 #/   -r, --require        Require the library. Often used with 'config/environment'.
 #/   -i, --keep-id        Use replicated ids when loading dump file.
 #/   -f, --force          Allow loading in production environments.
+#/   -s, --s3             Use S3 to store dumped data instead of STDOUT
+#/   --access-key=a   AWS Access Key (Used with S3 option)
+#/   --secret-key=s   AWS Secret Key (Used with S3 option)
+#/   --bucket-name=b  S3  Bucket name (Used with S3 option)
+#/   --key=k              S3 object key (Only for loading)
 #/   -v, --verbose        Write more status output.
 #/   -q, --quiet          Write less status output.
 $stderr.sync = true
@@ -31,12 +36,17 @@ $stdout = $stderr
 require 'optparse'
 
 # default options
-mode     = nil
-verbose  = false
-quiet    = false
-keep_id  = false
-out      = STDOUT
-force    = false
+mode      = nil
+verbose   = false
+quiet     = false
+keep_id   = false
+out       = STDOUT
+force     = false
+aws_access_key = nil
+aws_secret_key = nil
+s3_key         = nil
+aws_bucket_name = "replicate"
+transport = :stdout
 
 # parse arguments
 file = __FILE__
@@ -47,6 +57,11 @@ ARGV.options do |opts|
   opts.on("-l", "--load")      { mode = :load }
   opts.on("-r", "--require=f") { |file| require file }
   opts.on("-v", "--verbose")   { verbose = true }
+  opts.on("-s", "--s3")        { transport = :s3 }
+  opts.on("--access-key=a")    { |access_key| aws_access_key = access_key }
+  opts.on("--secret-key=s")    { |secret_key| aws_secret_key = secret_key }
+  opts.on("--bucket-name=b")   { |bucket_name| aws_bucket_name = bucket_name }
+  opts.on("--key=k")           { |key| s3_key = key }
   opts.on("-q", "--quiet")     { quiet = true }
   opts.on("-i", "--keep-id")   { keep_id = true }
   opts.on("--force")           { force = true }
@@ -62,6 +77,37 @@ if defined?(ActiveRecord::Base)
   ActiveRecord::Base.connection.enable_query_cache!
 end
 
+if transport == :s3
+  begin
+    require 'fog'
+    require 'stringio'
+  rescue LoadError
+    puts "Using S3 requires the Fog gem. Add it to your gemfile and try again"
+    exit 1
+  end
+
+  hash = {
+    :provider => "AWS",
+    :aws_access_key_id => aws_access_key,
+    :aws_secret_access_key => aws_secret_key}
+
+  connection = Fog::Storage.new(hash)
+
+
+  unless @directory = connection.directories.detect {|d| d.key == aws_bucket_name }
+    @directory = connection.directories.create(
+      :key => aws_bucket_name,
+      :public => false
+    )
+  end
+
+  @s3_file = @directory.files.create(
+   :key => "replicate-#{Time.now.to_i}.dump",
+   :body => "",
+   :public => false)
+
+  out = StringIO.new
+end
 # dump mode means we're reading records from the database here and writing to
 # stdout. the database should not be modified at all by this operation.
 if mode == :dump
@@ -81,16 +127,34 @@ if mode == :dump
     end
   end
 
+  if @s3_file
+    out.rewind
+    @s3_file.body = out.read
+    @s3_file.save
+    $stderr.puts "Saved to #{aws_bucket_name}/#{@s3_file.key}"
+  end
 # load mode means we're reading objects from stdin and creating them under
 # the current environment.
 elsif mode == :load
+  if transport == :s3
+    input = StringIO.new
+    file = @directory.files.detect {|f| f.key == s3_key }
+    unless file
+      puts "Couldn't find file #{s3_key} in bucket #{aws_bucket_name}"
+      exit 1
+    end
+    input.write(file.body)
+    input.rewind
+  else
+    input = $stdin
+  end
   if Replicate.production_environment? && !force
     abort "error: refusing to load in production environment\n" +
           "       manual override: #{File.basename($0)} --force #{original_argv.join(' ')}"
   else
     Replicate::Loader.new do |loader|
       loader.log_to $stderr, verbose, quiet
-      loader.read $stdin
+      loader.read input
     end
   end
 
